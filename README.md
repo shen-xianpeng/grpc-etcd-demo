@@ -1,7 +1,8 @@
 
 
 安装etcd
-brew install etcd
+    
+    brew install etcd
 
 安装etcd web浏览器工具 https://github.com/evildecay/etcdkeeper
 
