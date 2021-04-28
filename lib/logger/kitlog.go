@@ -15,8 +15,16 @@ import (
 )
 
 type wrapLogger struct {
-	stdLogger kitlog.Logger
-	errLogger kitlog.Logger
+	stdLogger logger //kitlog.Logger
+	errLogger logger
+}
+
+func (w *wrapLogger) GetStdLogger() logger {
+	return w.stdLogger
+}
+
+func (w *wrapLogger) GetErrLogger() logger {
+	return w.errLogger
 }
 
 func FileLineFuncNameCaller(depth int) kitlog.Valuer {
@@ -41,7 +49,7 @@ func TimeFormat() kitlog.Valuer {
 
 var LogDatetime kitlog.Valuer = TimeFormat()
 
-func GetLogger() loggerInterface {
+func InitLogger() loggerInterface {
 	if DefaultLogger != nil {
 		return DefaultLogger
 	}
@@ -115,4 +123,34 @@ func (m *wrapLogger) Warn(keyvals ...interface{}) error {
 func (m *wrapLogger) Error(keyvals ...interface{}) error {
 
 	return level.Error(m.errLogger).Log(keyvals...)
+}
+
+//keyvals必须是两个的倍数，key, val, key, val 这样成对出现
+func Debug(keyvals ...interface{}) error {
+
+	return level.Debug(DefaultLogger.GetStdLogger()).Log(keyvals...)
+}
+
+func Info(keyvals ...interface{}) error {
+
+	return level.Info(DefaultLogger.GetStdLogger()).Log(keyvals...)
+}
+
+func Warn(keyvals ...interface{}) error {
+
+	return level.Warn(DefaultLogger.GetErrLogger()).Log(keyvals...)
+}
+
+func Error(keyvals ...interface{}) error {
+	return level.Error(DefaultLogger.GetErrLogger()).Log(keyvals...)
+}
+
+func InfoMsg(format string, args ...interface{}) error {
+	msg := fmt.Sprintf(format, args...)
+	return level.Info(DefaultLogger.GetStdLogger()).Log("msg", msg)
+}
+
+func ErrorMsg(format string, args ...interface{}) error {
+	msg := fmt.Sprintf(format, args...)
+	return level.Info(DefaultLogger.GetErrLogger()).Log("msg", msg)
 }

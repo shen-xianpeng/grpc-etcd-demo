@@ -17,3 +17,8 @@
     go run client/main.go
 
 可以看到，客户端使用轮询的方式对三个服务端进行请求，从而实现负载均衡。
+
+
+通过grpcui调试grpc接口
+
+    grpcui localhost:3000

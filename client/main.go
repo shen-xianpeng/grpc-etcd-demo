@@ -3,8 +3,8 @@ package main
 import (
 	"flag"
 	"fmt"
-	proto "go-kit-etcd-demo/proto"
-	"log"
+	"go-kit-etcd-demo/lib/logger"
+	greet "go-kit-etcd-demo/lib/proto/greet"
 	"strings"
 	"time"
 
@@ -41,13 +41,12 @@ func (r *etcdResolver) Scheme() string {
 
 //watch有变化以后会调用
 func (r *etcdResolver) ResolveNow(rn resolver.ResolveNowOptions) {
-	log.Println("ResolveNow")
-	fmt.Println(rn)
+	logger.Info("ResolveNow", rn)
 }
 
 //解析器关闭时调用
 func (r *etcdResolver) Close() {
-	log.Println("Close")
+	logger.InfoMsg("Close")
 }
 
 //构建解析器 grpc.Dial()同步调用
@@ -61,7 +60,7 @@ func (r *etcdResolver) Build(target resolver.Target, clientConn resolver.ClientC
 			DialTimeout: 15 * time.Second,
 		})
 		if err != nil {
-			fmt.Printf("连接etcd失败：%s\n", err)
+			logger.ErrorMsg("连接etcd失败：%s", err.Error())
 			return nil, err
 		}
 	}
@@ -80,7 +79,7 @@ func (r *etcdResolver) watch(keyPrefix string) {
 
 	resp, err := cli.Get(context.Background(), keyPrefix, clientv3.WithPrefix())
 	if err != nil {
-		fmt.Println("获取服务地址列表失败：", err)
+		logger.ErrorMsg("获取服务地址列表失败：%s", err.Error())
 	} else {
 		for i := range resp.Kvs {
 			addrList = append(addrList, resolver.Address{Addr: strings.TrimPrefix(string(resp.Kvs[i].Key), keyPrefix)})
@@ -131,6 +130,7 @@ func remove(s []resolver.Address, addr string) ([]resolver.Address, bool) {
 
 func main() {
 	flag.Parse()
+	logger.InitLogger()
 
 	//注册etcd解析器
 	r := newResolver(*EtcdAddr)
@@ -139,34 +139,34 @@ func main() {
 	//客户端连接服务器(负载均衡：轮询) 会同步调用r.Build()
 	conn, err := grpc.Dial(r.Scheme()+"://author/"+*ServiceName, grpc.WithBalancerName("round_robin"), grpc.WithInsecure())
 	if err != nil {
-		fmt.Println("连接服务器失败：", err)
+		logger.ErrorMsg(" grpc.Dial %s ", err.Error())
 	}
 	defer conn.Close()
 
 	//获得grpc句柄
-	c := proto.NewGreetClient(conn)
+	c := greet.NewGreetClient(conn)
 	ticker := time.NewTicker(1 * time.Second)
 	for range ticker.C {
-		fmt.Println("Morning 调用...")
+		logger.InfoMsg("Morning 调用...")
 		resp1, err := c.Morning(
 			context.Background(),
-			&proto.GreetRequest{Name: "JetWu"},
+			&greet.GreetRequest{Name: "XianPeng"},
 		)
 		if err != nil {
-			fmt.Println("Morning调用失败：", err)
+			logger.ErrorMsg("Morning调用失败：%s", err.Error())
 			return
 		}
-		fmt.Printf("Morning 响应：%s，来自：%s\n", resp1.Message, resp1.From)
+		logger.Info("msg", resp1.Message, "form", resp1.From)
 
-		fmt.Println("Night 调用...")
+		logger.Debug("field_1", "Night 调用...")
 		resp2, err := c.Night(
 			context.Background(),
-			&proto.GreetRequest{Name: "JetWu"},
+			&greet.GreetRequest{Name: "Xianpeng"},
 		)
 		if err != nil {
-			fmt.Println("Night调用失败：", err)
+			logger.ErrorMsg("Night调用失败：%s", err.Error())
 			return
 		}
-		fmt.Printf("Night 响应：%s，来自：%s\n", resp2.Message, resp2.From)
+		logger.Debug("field_1", fmt.Sprintf("resp message %s from %s", resp2.Message, resp2.From))
 	}
 }

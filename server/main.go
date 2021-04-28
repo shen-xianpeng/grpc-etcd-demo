@@ -3,10 +3,8 @@ package main
 import (
 	"flag"
 	"fmt"
-	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
-	proto "go-kit-etcd-demo/proto"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
+	"go-kit-etcd-demo/lib/logger"
+	greet "go-kit-etcd-demo/lib/proto/greet"
 	"net"
 	"os"
 	"os/signal"
@@ -14,12 +12,17 @@ import (
 	"syscall"
 	"time"
 
+	"google.golang.org/grpc/reflection"
+
+	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"go.etcd.io/etcd/clientv3"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/recovery"
-
 )
 
 const schema = "ns"
@@ -39,17 +42,17 @@ var cli *clientv3.Client
 //rpc服务接口
 type greetServer struct{}
 
-func (gs *greetServer) Morning(ctx context.Context, req *proto.GreetRequest) (*proto.GreetResponse, error) {
-	fmt.Printf("Morning 调用: %s\n", req.Name)
-	return &proto.GreetResponse{
+func (gs *greetServer) Morning(ctx context.Context, req *greet.GreetRequest) (*greet.GreetResponse, error) {
+	logger.InfoMsg("Morning 调用: %s", req.Name)
+	return &greet.GreetResponse{
 		Message: "Good morning, " + req.Name,
 		From:    fmt.Sprintf("127.0.0.1:%d", *Port),
 	}, nil
 }
 
-func (gs *greetServer) Night(ctx context.Context, req *proto.GreetRequest) (*proto.GreetResponse, error) {
-	fmt.Printf("Night 调用: %s\n", req.Name)
-	return &proto.GreetResponse{
+func (gs *greetServer) Night(ctx context.Context, req *greet.GreetRequest) (*greet.GreetResponse, error) {
+	logger.InfoMsg("Night 调用: %s", req.Name)
+	return &greet.GreetResponse{
 		Message: "Good night, " + req.Name,
 		From:    fmt.Sprintf("127.0.0.1:%d", *Port),
 	}, nil
@@ -66,7 +69,7 @@ func register(etcdAddr, serviceName, serverAddr string, ttl int64) error {
 			DialTimeout: 15 * time.Second,
 		})
 		if err != nil {
-			fmt.Printf("连接etcd失败：%s\n", err)
+			logger.ErrorMsg("连接etcd失败：%s", err.Error())
 			return err
 		}
 	}
@@ -79,11 +82,11 @@ func register(etcdAddr, serviceName, serverAddr string, ttl int64) error {
 			resp, err := cli.Get(context.Background(), key)
 			//fmt.Printf("resp:%+v\n", resp)
 			if err != nil {
-				fmt.Printf("获取服务地址失败：%s", err)
+				logger.ErrorMsg("获取服务地址失败：%s", err.Error())
 			} else if resp.Count == 0 { //尚未注册
 				err = keepAlive(serviceName, serverAddr, ttl)
 				if err != nil {
-					fmt.Printf("保持连接失败：%s", err)
+					logger.ErrorMsg("保持连接失败：%s", err.Error())
 				}
 			}
 			<-ticker.C
@@ -106,14 +109,14 @@ func keepAlive(serviceName, serverAddr string, ttl int64) error {
 	key := "/" + schema + "/" + serviceName + "/" + serverAddr
 	_, err = cli.Put(context.Background(), key, serverAddr, clientv3.WithLease(leaseResp.ID))
 	if err != nil {
-		fmt.Printf("注册服务失败：%s", err)
+		logger.ErrorMsg("注册服务失败：%s", err.Error())
 		return err
 	}
 
 	//建立长连接
 	ch, err := cli.KeepAlive(context.Background(), leaseResp.ID)
 	if err != nil {
-		fmt.Printf("建立长连接失败：%s\n", err)
+		logger.ErrorMsg("建立长连接失败：%s", err.Error())
 		return err
 	}
 
@@ -136,11 +139,11 @@ func unRegister(serviceName, serverAddr string) {
 
 func main() {
 	flag.Parse()
-
+	logger.InitLogger()
 	//监听网络
 	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", *Port))
 	if err != nil {
-		fmt.Println("监听网络失败：", err)
+		logger.Error("监听网络失败：", err)
 		return
 	}
 	defer listener.Close()
@@ -159,11 +162,12 @@ func main() {
 		grpc_middleware.WithStreamServerChain(
 			grpc_recovery.StreamServerInterceptor(opts...),
 		),
-		)
+	)
 	defer srv.GracefulStop()
 
 	//将greetServer结构体注册到grpc服务中
-	proto.RegisterGreetServer(srv, &greetServer{})
+	greet.RegisterGreetServer(srv, &greetServer{})
+	reflection.Register(srv)
 
 	//将服务地址注册到etcd中
 	serverAddr := fmt.Sprintf("%s:%d", host, *Port)
