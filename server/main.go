@@ -3,7 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
+	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
 	proto "go-kit-etcd-demo/proto"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"net"
 	"os"
 	"os/signal"
@@ -14,9 +17,16 @@ import (
 	"go.etcd.io/etcd/clientv3"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
+
+	"github.com/grpc-ecosystem/go-grpc-middleware/recovery"
+
 )
 
 const schema = "ns"
+
+var (
+	customFunc grpc_recovery.RecoveryHandlerFunc
+)
 
 var host = "127.0.0.1" //服务器主机
 var (
@@ -135,8 +145,21 @@ func main() {
 	}
 	defer listener.Close()
 
+	customFunc = func(p interface{}) (err error) {
+		return status.Errorf(codes.Unknown, "panic triggered: %v", p)
+	}
+	opts := []grpc_recovery.Option{
+		grpc_recovery.WithRecoveryHandler(customFunc),
+	}
 	//创建grpc句柄
-	srv := grpc.NewServer()
+	srv := grpc.NewServer(
+		grpc_middleware.WithUnaryServerChain(
+			grpc_recovery.UnaryServerInterceptor(opts...),
+		),
+		grpc_middleware.WithStreamServerChain(
+			grpc_recovery.StreamServerInterceptor(opts...),
+		),
+		)
 	defer srv.GracefulStop()
 
 	//将greetServer结构体注册到grpc服务中
