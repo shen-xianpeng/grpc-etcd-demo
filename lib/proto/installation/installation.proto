@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+option go_package = ".;installation";
+
+
+service Installation {
+    // 安装app以设备为参数，从服务器端获取到一个账号和密码
+    rpc ServerInfo(ServerInfoRequest) returns (ServerInfoResponse){}
+    rpc RegisterDevice(RegisterDeviceRequest) returns (RegisterDeviceResponse){}
+}
+
+message ServerInfoRequest {
+}
+
+message ServerInfoResponse {
+    string addr = 1;
+}
+
+message RegisterDeviceRequest {
+    string device_id = 1;
+}
+
+message RegisterDeviceResponse {
+    string device_id = 1;
+    string device_secret = 2;
+}

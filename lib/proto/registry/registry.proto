@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+option go_package = ".;registry";
+
+service Registry {
+}
+
+message GrpcNodeInfo {
+    string addr = 1;
+    string transport = 2;
+    string version = 3;
+}

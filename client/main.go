@@ -1,10 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
-	"fmt"
 	"go-kit-etcd-demo/lib/logger"
-	greet "go-kit-etcd-demo/lib/proto/greet"
+	installation "go-kit-etcd-demo/lib/proto/installation"
+	"go-kit-etcd-demo/lib/proto/registry"
 	"strings"
 	"time"
 
@@ -15,10 +16,10 @@ import (
 	"google.golang.org/grpc/resolver"
 )
 
-const schema = "ns"
+const schema = "72changes"
 
 var (
-	ServiceName = flag.String("ServiceName", "greet_service", "service name")        //服务名称
+	ServiceName = flag.String("ServiceName", "grpc_service", "service name")         //服务名称
 	EtcdAddr    = flag.String("EtcdAddr", "127.0.0.1:2379", "register etcd address") //etcd的地址
 )
 
@@ -92,15 +93,20 @@ func (r *etcdResolver) watch(keyPrefix string) {
 	rch := cli.Watch(context.Background(), keyPrefix, clientv3.WithPrefix())
 	for n := range rch {
 		for _, ev := range n.Events {
-			addr := strings.TrimPrefix(string(ev.Kv.Key), keyPrefix)
+			nodeJsonStr := strings.TrimPrefix(string(ev.Kv.Key), keyPrefix)
+			nodeInfo := registry.GrpcNodeInfo{}
+			err := json.Unmarshal(([]byte)(nodeJsonStr), &nodeInfo)
+			if err != nil {
+				logger.ErrorMsg("event error ev.Kv.Key: %s", err.Error())
+			}
 			switch ev.Type {
 			case mvccpb.PUT:
-				if !exists(addrList, addr) {
-					addrList = append(addrList, resolver.Address{Addr: addr})
+				if !exists(addrList, nodeInfo.Addr) {
+					addrList = append(addrList, resolver.Address{Addr: nodeInfo.Addr})
 					r.clientConn.NewAddress(addrList)
 				}
 			case mvccpb.DELETE:
-				if s, ok := remove(addrList, addr); ok {
+				if s, ok := remove(addrList, nodeInfo.Addr); ok {
 					addrList = s
 					r.clientConn.NewAddress(addrList)
 				}
@@ -144,29 +150,19 @@ func main() {
 	defer conn.Close()
 
 	//获得grpc句柄
-	c := greet.NewGreetClient(conn)
+	c := installation.NewInstallationClient(conn)
 	ticker := time.NewTicker(1 * time.Second)
 	for range ticker.C {
-		logger.InfoMsg("Morning 调用...")
-		resp1, err := c.Morning(
+		logger.InfoMsg("RegisterDevice 调用...")
+		resp, err := c.ServerInfo(
 			context.Background(),
-			&greet.GreetRequest{Name: "XianPeng"},
+			&installation.ServerInfoRequest{},
 		)
 		if err != nil {
-			logger.ErrorMsg("Morning调用失败：%s", err.Error())
+			logger.ErrorMsg("RegisterDevice：%s", err.Error())
 			return
 		}
-		logger.Info("msg", resp1.Message, "form", resp1.From)
+		logger.InfoMsg("server addr %s", resp.Addr)
 
-		logger.Debug("field_1", "Night 调用...")
-		resp2, err := c.Night(
-			context.Background(),
-			&greet.GreetRequest{Name: "Xianpeng"},
-		)
-		if err != nil {
-			logger.ErrorMsg("Night调用失败：%s", err.Error())
-			return
-		}
-		logger.Debug("field_1", fmt.Sprintf("resp message %s from %s", resp2.Message, resp2.From))
 	}
 }

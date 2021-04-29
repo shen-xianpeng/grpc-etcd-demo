@@ -1,10 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"go-kit-etcd-demo/lib/logger"
-	greet "go-kit-etcd-demo/lib/proto/greet"
 	"net"
 	"os"
 	"os/signal"
@@ -12,54 +12,41 @@ import (
 	"syscall"
 	"time"
 
-	"google.golang.org/grpc/reflection"
+	installationProto "go-kit-etcd-demo/lib/proto/installation"
+	registryProto "go-kit-etcd-demo/lib/proto/registry"
+	installationServer "go-kit-etcd-demo/server/installation"
 
 	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 
 	"go.etcd.io/etcd/clientv3"
 	"golang.org/x/net/context"
-	"google.golang.org/grpc"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/recovery"
 )
 
-const schema = "ns"
+const (
+	namespace = "72changes"
+	VERSION   = "0.0.1"
+)
 
 var (
-	customFunc grpc_recovery.RecoveryHandlerFunc
+	panicRecoveryFunc grpc_recovery.RecoveryHandlerFunc
 )
 
 var host = "127.0.0.1" //服务器主机
 var (
 	Port        = flag.Int("Port", 3000, "listening port")                           //服务器监听端口
-	ServiceName = flag.String("ServiceName", "greet_service", "service name")        //服务名称
+	ServiceName = flag.String("ServiceName", "grpc_service", "service name")         //服务名称
 	EtcdAddr    = flag.String("EtcdAddr", "127.0.0.1:2379", "register etcd address") //etcd的地址
 )
 var cli *clientv3.Client
 
-//rpc服务接口
-type greetServer struct{}
-
-func (gs *greetServer) Morning(ctx context.Context, req *greet.GreetRequest) (*greet.GreetResponse, error) {
-	logger.InfoMsg("Morning 调用: %s", req.Name)
-	return &greet.GreetResponse{
-		Message: "Good morning, " + req.Name,
-		From:    fmt.Sprintf("127.0.0.1:%d", *Port),
-	}, nil
-}
-
-func (gs *greetServer) Night(ctx context.Context, req *greet.GreetRequest) (*greet.GreetResponse, error) {
-	logger.InfoMsg("Night 调用: %s", req.Name)
-	return &greet.GreetResponse{
-		Message: "Good night, " + req.Name,
-		From:    fmt.Sprintf("127.0.0.1:%d", *Port),
-	}, nil
-}
-
 //将服务地址注册到etcd中
-func register(etcdAddr, serviceName, serverAddr string, ttl int64) error {
+func register(etcdAddr, serviceName, serverAddr string, version string, ttl int64) error {
 	var err error
 
 	if cli == nil {
@@ -77,14 +64,14 @@ func register(etcdAddr, serviceName, serverAddr string, ttl int64) error {
 	//与etcd建立长连接，并保证连接不断(心跳检测)
 	ticker := time.NewTicker(time.Second * time.Duration(ttl))
 	go func() {
-		key := "/" + schema + "/" + serviceName + "/" + serverAddr
+		key := "/" + namespace + "/" + serviceName + "/" + serverAddr
 		for {
 			resp, err := cli.Get(context.Background(), key)
 			//fmt.Printf("resp:%+v\n", resp)
 			if err != nil {
 				logger.ErrorMsg("获取服务地址失败：%s", err.Error())
 			} else if resp.Count == 0 { //尚未注册
-				err = keepAlive(serviceName, serverAddr, ttl)
+				err = keepAlive(serviceName, serverAddr, VERSION, ttl)
 				if err != nil {
 					logger.ErrorMsg("保持连接失败：%s", err.Error())
 				}
@@ -97,17 +84,23 @@ func register(etcdAddr, serviceName, serverAddr string, ttl int64) error {
 }
 
 //保持服务器与etcd的长连接
-func keepAlive(serviceName, serverAddr string, ttl int64) error {
+func keepAlive(serviceName, serverAddr string, version string, ttl int64) error {
 	//创建租约
 	leaseResp, err := cli.Grant(context.Background(), ttl)
 	if err != nil {
-		fmt.Printf("创建租期失败：%s\n", err)
+		logger.ErrorMsg("创建租期失败：%s", err.Error())
 		return err
 	}
 
 	//将服务地址注册到etcd中
-	key := "/" + schema + "/" + serviceName + "/" + serverAddr
-	_, err = cli.Put(context.Background(), key, serverAddr, clientv3.WithLease(leaseResp.ID))
+	key := "/" + namespace + "/" + serviceName + "/" + serverAddr
+	val := registryProto.GrpcNodeInfo{
+		Addr:    serverAddr,
+		Version: version,
+	}
+
+	valBytes, _ := json.Marshal(val)
+	_, err = cli.Put(context.Background(), key, string(valBytes), clientv3.WithLease(leaseResp.ID))
 	if err != nil {
 		logger.ErrorMsg("注册服务失败：%s", err.Error())
 		return err
@@ -132,7 +125,7 @@ func keepAlive(serviceName, serverAddr string, ttl int64) error {
 //取消注册
 func unRegister(serviceName, serverAddr string) {
 	if cli != nil {
-		key := "/" + schema + "/" + serviceName + "/" + serverAddr
+		key := "/" + namespace + "/" + serviceName + "/" + serverAddr
 		cli.Delete(context.Background(), key)
 	}
 }
@@ -141,18 +134,19 @@ func main() {
 	flag.Parse()
 	logger.InitLogger()
 	//监听网络
-	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", *Port))
+	serverAddr := fmt.Sprintf("%s:%d", host, *Port)
+	listener, err := net.Listen("tcp", serverAddr)
 	if err != nil {
 		logger.Error("监听网络失败：", err)
 		return
 	}
 	defer listener.Close()
 
-	customFunc = func(p interface{}) (err error) {
+	panicRecoveryFunc = func(p interface{}) (err error) {
 		return status.Errorf(codes.Unknown, "panic triggered: %v", p)
 	}
 	opts := []grpc_recovery.Option{
-		grpc_recovery.WithRecoveryHandler(customFunc),
+		grpc_recovery.WithRecoveryHandler(panicRecoveryFunc),
 	}
 	//创建grpc句柄
 	srv := grpc.NewServer(
@@ -165,14 +159,22 @@ func main() {
 	)
 	defer srv.GracefulStop()
 
-	//将greetServer结构体注册到grpc服务中
-	greet.RegisterGreetServer(srv, &greetServer{})
+	//将installationServer结构体注册到grpc服务中
+	installSrv, errs := installationServer.NewInstallationServer(
+		installationServer.Addr(serverAddr),
+	)
+	if errs != nil {
+		logger.ErrorMsg("installationServer init error %#v", errs)
+	}
+	installationProto.RegisterInstallationServer(
+		srv,
+		installSrv,
+	)
 	reflection.Register(srv)
 
 	//将服务地址注册到etcd中
-	serverAddr := fmt.Sprintf("%s:%d", host, *Port)
-	fmt.Printf("greeting server address: %s\n", serverAddr)
-	register(*EtcdAddr, *ServiceName, serverAddr, 5)
+	logger.InfoMsg("grpc server address: %s", serverAddr)
+	register(*EtcdAddr, *ServiceName, serverAddr, VERSION, 5)
 
 	//关闭信号处理
 	ch := make(chan os.Signal, 1)
@@ -190,7 +192,7 @@ func main() {
 	//监听服务
 	err = srv.Serve(listener)
 	if err != nil {
-		fmt.Println("监听异常：", err)
+		logger.ErrorMsg("监听异常：%s", err.Error())
 		return
 	}
 }

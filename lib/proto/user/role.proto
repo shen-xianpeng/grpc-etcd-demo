@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+option go_package = ".;user";
+
+service Role {
+    rpc CheckPerm(CheckPermRequest)returns(CheckPermResponse){}
+}
+
+message CheckPermRequest {
+    string token = 1;
+}
+
+message CheckPermResponse {
+}
